@@ -5,6 +5,7 @@ import (
 	"image/color"
 	"sync"
 
+	"gioui.org/font"
 	"gioui.org/layout"
 	"gioui.org/text"
 	"gioui.org/unit"
@@ -26,10 +27,12 @@ type MarkdownRenderer struct {
 func NewMarkdownRenderer(shaper *text.Shaper, textColor, accentColor color.NRGBA) *MarkdownRenderer {
 	r := markdown.NewRenderer()
 	r.Config = markdown.Config{
+		DefaultFont:      font.Font{Typeface: "Inter"},
+		MonospaceFont:    font.Font{Typeface: "JetBrains Mono"},
 		DefaultSize:      unit.Sp(14),
 		H1Size:           unit.Sp(24),
 		H2Size:           unit.Sp(20),
-		H3Size:           unit.Sp(17),
+		H3Size:           unit.Sp(16),
 		H4Size:           unit.Sp(15),
 		DefaultColor:     textColor,
 		InteractiveColor: accentColor,
