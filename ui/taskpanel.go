@@ -22,9 +22,10 @@ type TaskPanel struct {
 	theme    apptheme.Theme
 	matTheme *material.Theme
 
-	visible    bool
-	tasks      []br.Task
-	brErr      string
+	visible       bool
+	tasks         []br.Task
+	brErr         string
+	brInitialized bool
 	list       widget.List
 	refreshBtn widget.Clickable
 	taskHovers []widgets.HoverState
@@ -45,9 +46,13 @@ func (tp *TaskPanel) SetVisible(v bool) { tp.visible = v }
 func (tp *TaskPanel) Visible() bool     { return tp.visible }
 func (tp *TaskPanel) Toggle()           { tp.visible = !tp.visible }
 
+// SetBrInitialized sets whether br is initialized in the workspace.
+func (tp *TaskPanel) SetBrInitialized(v bool) { tp.brInitialized = v }
+
 func (tp *TaskPanel) SetTasks(tasks []br.Task) {
 	tp.tasks = tasks
 	tp.brErr = ""
+	tp.brInitialized = true
 	for len(tp.taskHovers) < len(tasks) {
 		tp.taskHovers = append(tp.taskHovers, widgets.HoverState{})
 	}
@@ -102,9 +107,15 @@ func (tp *TaskPanel) Layout(gtx layout.Context) layout.Dimensions {
 			// Task list
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 				if len(tp.tasks) == 0 && tp.brErr == "" {
-					lbl := material.Label(tp.matTheme, tp.theme.Typo.BodySmall, "No tasks yet.")
-					lbl.Color = tp.theme.Palette.TextTertiary
-					return lbl.Layout(gtx)
+					msg := "No tasks yet."
+					hint := "Create a plan, then generate tasks"
+					if !tp.brInitialized {
+						msg = "Task tracking not initialized."
+						hint = "br init"
+					}
+					return widgets.EmptyState{Message: msg, Hint: hint}.Layout(
+						gtx, tp.matTheme, tp.theme.Palette.TextSecondary, tp.theme.Palette.TextTertiary,
+					)
 				}
 				return tp.layoutTaskList(gtx)
 			}),

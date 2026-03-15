@@ -10,6 +10,7 @@ import (
 
 	apptheme "github.com/lighto/pier/app"
 	"github.com/lighto/pier/session"
+	"github.com/lighto/pier/ui/widgets"
 	"github.com/lighto/pier/workspace"
 )
 
@@ -101,9 +102,10 @@ func (dv *DiscoverView) Layout(gtx layout.Context) layout.Dimensions {
 		// Timeline
 		layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
 			if dv.session == nil {
-				lbl := material.Body2(dv.matTheme, "Start a discovery conversation to think through your approach.")
-				lbl.Color = dv.theme.Palette.TextSecondary
-				return lbl.Layout(gtx)
+				return widgets.EmptyState{
+					Message: "Think through your approach before writing code.",
+					Hint:    "Start a discovery conversation below",
+				}.Layout(gtx, dv.matTheme, dv.theme.Palette.TextSecondary, dv.theme.Palette.TextTertiary)
 			}
 			return dv.timeline.Layout(gtx, dv.session.State)
 		}),
