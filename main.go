@@ -12,9 +12,9 @@ import (
 	"gioui.org/io/key"
 	"gioui.org/layout"
 	"gioui.org/op"
+	"gioui.org/font"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
-	"gioui.org/text"
 	"gioui.org/unit"
 	"gioui.org/widget"
 	"gioui.org/widget/material"
@@ -22,6 +22,7 @@ import (
 	apptheme "github.com/lighto/pier/app"
 	brclient "github.com/lighto/pier/br"
 	"github.com/lighto/pier/config"
+	"github.com/lighto/pier/fonts"
 	"github.com/lighto/pier/session"
 	"github.com/lighto/pier/ui"
 	"github.com/lighto/pier/workspace"
@@ -75,8 +76,10 @@ type appState struct {
 func run(w *app.Window) error {
 	cfg, _ := config.Load()
 	theme := apptheme.ThemeByName(cfg.Theme)
+	shaper := fonts.NewShaper()
 	matTheme := material.NewTheme()
-	matTheme.Shaper = text.NewShaper(text.WithCollection([]text.FontFace{}))
+	matTheme.Shaper = shaper
+	matTheme.Face = font.Typeface(fonts.TypefaceInter)
 
 	cwd, _ := os.Getwd()
 
