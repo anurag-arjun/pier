@@ -1,8 +1,10 @@
 # Pier — Architecture Document
 
-A lightweight, native GUI for the pi coding agent. Manages multiple concurrent pi sessions, surfaces structured agent data invisible in a raw terminal, and covers the complete workflow from discovery conversation through task execution — all in one tool.
+A lightweight, native GUI for [pi](https://pi.dev), the open-source terminal coding harness. Connects to pi's [RPC mode](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent/docs/rpc.md) (JSON protocol over stdin/stdout) to render structured agent data invisible in a raw terminal. Manages multiple concurrent pi sessions, covers the complete workflow from discovery through task execution, and integrates with [br](https://github.com/Dicklesworthstone/beads_rust) for task tracking — all in one tool.
 
-Stack: Go + Gio · Single binary · Wayland/X11 (CachyOS) · Mac-compatible (Metal) via `GOOS=darwin`
+Pier is a display layer. Pi does all the LLM work (tools, context, extensions, compaction, model switching). Pier reads the event stream and provides the visual interface.
+
+Stack: Go + Gio · Single binary (~11MB) · Wayland/X11 (CachyOS) · Mac-compatible (Metal) via `GOOS=darwin`
 
 ## Table of Contents
 
@@ -22,11 +24,13 @@ Stack: Go + Gio · Single binary · Wayland/X11 (CachyOS) · Mac-compatible (Met
 14. [Persistence Model](#14-persistence-model)
 15. [Keyboard Shortcuts](#15-keyboard-shortcuts)
 16. [Configuration](#16-configuration)
-17. [Rendering Performance](#17-rendering-performance)
-18. [Cross-Platform Notes](#18-cross-platform-notes)
-19. [Build and Distribution](#19-build-and-distribution)
-20. [Build Order](#20-build-order)
-21. [What You Get Over the Current Workflow](#21-what-you-get-over-the-current-workflow)
+17. [Visual Design](#17-visual-design)
+18. [Rendering Performance](#18-rendering-performance)
+19. [Authentication](#19-authentication)
+20. [Cross-Platform Notes](#20-cross-platform-notes)
+21. [Build and Distribution](#21-build-and-distribution)
+22. [Build Order](#22-build-order)
+23. [What You Get Over the Current Workflow](#23-what-you-get-over-the-current-workflow)
 
 ---
 
@@ -77,8 +81,9 @@ A br issue (`br` = beads_rust CLI). Tasks live in `.beads/` inside the workspace
 | Pi integration | `os/exec` + JSON stream decoder | Stdlib only. Pi's RPC mode emits newline-delimited JSON on stdout. One `bufio.Scanner` per session goroutine. |
 | br integration | `os/exec` + `br --json` | Shell out to the br binary. No direct SQLite dependency. On-demand only, not polled. |
 | Persistence | `encoding/json` | Single config file + per-workspace state file. No database. |
-| Diffing | `go-difflib` (Phase 5) | Custom diff widget for write-tool results. Initially, tool output rendered as monospace text — pi's output already contains diff information. |
-| Binary | `go build` | Single static binary. No runtime deps beyond libc. |
+| Diffing | Custom (`ui/widgets/diff.go`) | Unified diff parser with green/red line rendering. No external dependency — parses +/-/@ prefixes directly. |
+| Fonts | Inter + JetBrains Mono (`go:embed`) | Inter for UI text (4 weights), JetBrains Mono for code (2 weights). Embedded in binary via `go:embed`. OFL licensed. |
+| Binary | `go build` | Single static binary (~11MB). No runtime deps beyond libc. |
 
 **Why not Rust + egui:** Rust's async ergonomics for process management (`Arc<Mutex<>>` across async boundaries) adds friction for a primarily IO-bound app. Go's goroutines handle this more naturally.
 
@@ -422,51 +427,64 @@ On every startup, Pier extracts bundled resources to `~/.config/pier/resources/`
 
 ```
 pier/
-├── main.go
+├── main.go                    app wiring, event loop, key dispatch
 │
 ├── app/
-│   ├── app.go              top-level App struct, workspace list, Gio event loop
-│   ├── keymap.go           global shortcut definitions and dispatch
-│   └── theme.go            colours, typography, spacing constants
+│   ├── app.go              package declaration
+│   ├── keymap.go           pi passthrough + Pier UI action dispatch
+│   └── theme.go            4-level dark/light palettes, 8px grid, typography
+│
+├── fonts/
+│   ├── fonts.go            go:embed Inter + JetBrains Mono, NewShaper()
+│   ├── Inter-*.ttf         Inter Regular/Medium/SemiBold/Bold (OFL)
+│   └── JetBrainsMono-*.ttf JetBrains Mono Regular/Bold (OFL)
 │
 ├── workspace/
-│   ├── workspace.go        Workspace struct
-│   └── persist.go          save/load ~/.config/pier/
+│   └── workspace.go        Workspace struct, save/load ~/.config/pier/
 │
 ├── session/
-│   ├── session.go          Session struct and lifecycle (start/stop/restart)
-│   ├── process.go          pi process management, stdin/stdout pipes
-│   ├── events.go           RPC event parsing and dispatch
-│   └── state.go            per-session UI state (timeline, model, status)
-│
-├── discover/
-│   └── discover.go         DiscoverySession struct, message history, handoff
-│
-├── plan/
-│   ├── plan.go             plan state, brief handling
-│   └── renderer.go         markdown → Gio richtext via gioui.org/x/markdown
+│   ├── session.go          Session struct, DrainEvents, SendPrompt
+│   ├── process.go          pi process spawn/pipe/stop
+│   ├── events.go           all RPC event/response type definitions
+│   ├── commands.go         all RPC command types + ExtensionUIResponse
+│   ├── decoder.go          JSONL decoder (\n-only split)
+│   └── state.go            session state machine, timeline model
 │
 ├── br/
-│   ├── br.go               br CLI wrapper
-│   ├── refresh.go          on-demand refresh goroutine with caching
-│   └── types.go            Task, Status, Priority structs
+│   ├── br.go               br CLI wrapper (List, Ready, Show, Close)
+│   └── types.go            Task struct
 │
 ├── ui/
-│   ├── layout.go           top-level layout: sidebar + main area
-│   ├── sidebar.go          workspace list, session cards
-│   ├── workspace_view.go   discover panel, plan panel, task panel, session area
-│   ├── discover_view.go    chat thread, model selector, generate plan button
-│   ├── timeline.go         message/tool call timeline widget
-│   ├── promptbar.go        input widget, slash command autocomplete
-│   ├── taskpanel.go        br task list, ready/in-progress/blocked sections
-│   ├── extensionui.go      extension UI dialog handler (select, confirm, input, editor)
+│   ├── layout.go           package declaration
+│   ├── sidebar.go          workspace list, hover states, accent bar, pill badges
+│   ├── workspace_view.go   multi-session tabs, task linking
+│   ├── discover_view.go    tool-free chat, Generate Plan handoff
+│   ├── timeline.go         left-bordered messages, grouped spacing, model badges
+│   ├── promptbar.go        bordered input, status line, slash autocomplete
+│   ├── taskpanel.go        bordered cards, priority dots, hover, error accent
+│   ├── planpanel.go        plan.md markdown rendering, Open in $EDITOR
+│   ├── extensionui.go      dimmed backdrop modal, select/confirm/input dialogs
 │   └── widgets/
-│       ├── badge.go        model/status badges
-│       ├── toolblock.go    collapsible tool call block
-│       └── markdown.go     markdown renderer wrapper (streaming vs complete modes)
+│       ├── draw.go         WithAlpha, MulAlpha, Hovered, DrawRect, DrawBorderedRect
+│       ├── hover.go        HoverState (pointer enter/leave tracking)
+│       ├── toolblock.go    bordered collapsible card with error accent
+│       ├── markdown.go     cached markdown renderer (Inter + JetBrains Mono)
+│       ├── diff.go         green/red unified diff rendering
+│       ├── animated_dot.go pulsing sine wave status dot
+│       ├── empty_state.go  centered placeholder messages
+│       ├── scroll_shadow.go top/bottom gradient overflow indicators
+│       └── badge.go        package declaration
 │
-└── config/
-    └── config.go           user config struct, load/save, defaults
+├── config/
+│   └── config.go           AppConfig load/save (~/.config/pier/)
+│
+└── resources/
+    ├── embed.go            go:embed FS for bundled prompts
+    ├── extract.go          ExtractTo for startup extraction
+    ├── system-prompts/
+    │   └── discover.md     planning-focused system prompt
+    └── prompts/
+        └── create-tasks.md task decomposition prompt template
 ```
 
 ---
@@ -621,11 +639,11 @@ Launch pi with `--session <path>` where path is the `session_file` stored in the
   "pi_path": "",
   "br_path": "",
   "default_model": "claude-sonnet-4-5",
-  "theme": "light"
+  "theme": "dark"
 }
 ```
 
-Auth is handled entirely by pi. Run `pi /login` once to authenticate with your Claude Max subscription. Pier inherits that auth for all sessions. No credentials in Pier.
+Auth is handled entirely by pi (see [§19 Authentication](#19-authentication)). Run `pi /login` once in a terminal. Pier inherits that auth for all sessions. No credentials in Pier.
 
 ### Workspace State Files
 
@@ -645,20 +663,41 @@ br manages `.beads/beads.db` and `.beads/issues.jsonl` inside the workspace dire
 
 ## 15. Keyboard Shortcuts
 
+Shortcuts are split into three categories. Pi passthrough shortcuts send RPC commands to pi — they use the same keys as pi's terminal UI.
+
+### Pi Passthrough (sent as RPC commands)
+
+| Shortcut | RPC Command | Action |
+|----------|-------------|--------|
+| `Escape` | `abort` | Abort current agent run |
+| `Ctrl+P` | `cycle_model` | Cycle to next model |
+| `Ctrl+Shift+P` | `cycle_model` (backward) | Cycle model backward |
+| `Shift+Tab` | `cycle_thinking_level` | Cycle thinking level |
+| `Ctrl+L` | `cycle_model` | Select model |
+
+### Session Lifecycle (pi process management)
+
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl+N` | New workspace |
+| `Ctrl+C` | Clear prompt bar (first press) |
+| `Ctrl+C` ×2 | Kill pi session (double-tap within 1s) |
+| `Ctrl+W` | Close session |
 | `Ctrl+Shift+N` | New session in current workspace |
+
+### Pier UI
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+O` | Collapse/expand all tool blocks |
+| `Ctrl+B` | Toggle task panel |
+| `Ctrl+R` | Refresh task panel |
+| `Ctrl+/` | Focus prompt bar |
+| `Ctrl+Shift+C` | Copy last assistant message |
+| `Ctrl+N` | New workspace |
 | `Ctrl+1..9` | Switch to workspace N |
 | `Ctrl+Tab` | Cycle workspaces |
-| `Ctrl+W` | Close focused session |
-| `Ctrl+/` | Focus prompt bar |
-| `Ctrl+B` | Toggle task panel |
-| `Ctrl+Shift+C` | Copy last assistant message |
-| `Ctrl+R` | Refresh task panel |
-| `Escape` | Collapse all open tool blocks |
 
-Shortcuts are hardcoded.
+Shortcuts are hardcoded in `app/keymap.go`.
 
 ---
 
@@ -669,11 +708,70 @@ Shortcuts are hardcoded.
 | `pi_path` | resolved from PATH | Path to pi binary |
 | `br_path` | resolved from PATH | Path to br binary |
 | `default_model` | `"claude-sonnet-4-5"` | Default model for new sessions |
-| `theme` | `"light"` | light / dark |
+| `theme` | `"dark"` | light / dark |
 
 ---
 
-## 17. Rendering Performance
+## 17. Visual Design
+
+Pier follows a Slack-inspired design language built on consistent primitives.
+
+### Design Tokens
+
+**8px Grid.** All spacing derived from a 4px half-step base: 4 (XXS), 8 (XS), 12 (S), 16 (M), 24 (L), 32 (XL) dp. No magic numbers.
+
+**4-Level Surface Stack.** Background → Surface → SurfaceAlt → SurfaceRaised. Each level is slightly lighter, creating depth without shadows.
+
+| Level | Dark | Light | Usage |
+|-------|------|-------|-------|
+| Background | `#1a1a1e` | `#f8f8fa` | Deepest layer, main content area |
+| Surface | `#242428` | `#ffffff` | Cards, sidebar, panels |
+| SurfaceAlt | `#2e2e33` | `#f2f2f5` | Hover states, selected items |
+| SurfaceRaised | `#38383e` | `#ffffff` | Modals, dropdowns, popovers |
+
+**Opacity-Based Text Hierarchy.** One base text color with alpha variations:
+
+| Role | Opacity | Usage |
+|------|---------|-------|
+| Primary | 90% | Body text, titles |
+| Secondary | 60% | Supporting text, descriptions |
+| Tertiary | 40% | Timestamps, captions, section headers |
+| Disabled | 28% | Inactive elements |
+
+### Typography
+
+Two font families embedded via `go:embed`:
+
+- **Inter** (Regular, Medium, SemiBold, Bold) — all UI text
+- **JetBrains Mono** (Regular, Bold) — code blocks, tool output, task IDs, model badges
+
+Scale: H1=24sp, H2=20sp, H3=16sp, Body=14sp, BodySmall=13sp, Mono=13sp, Caption=11sp.
+
+### Component Patterns
+
+**Hover feedback.** Sidebar items, tool blocks, task cards, and autocomplete options track `pointer.Enter`/`pointer.Leave` via a reusable `HoverState` widget. Hover brightens the background or border.
+
+**Accent indicators.** Left border bars for visual anchoring: 2dp accent on assistant messages, 3dp accent on selected workspace, 3dp red on error tool calls.
+
+**Pill badges.** Model names and task IDs render as rounded pills (SurfaceAlt background, MonoFace, BadgeRadius corners).
+
+**Animated status dots.** Thinking and streaming states pulse via a sine wave (1.5s period, alpha 100→255→100) using `gtx.Execute(op.InvalidateCmd{})`. Static when idle.
+
+**Bordered cards.** Tool blocks and task cards use `DrawBorderedRect` (fill + 1px border + radius). Border brightens on hover.
+
+**Dimmed modal backdrop.** Extension dialogs overlay a 70% opacity Background dim, with the dialog card centered in SurfaceRaised.
+
+### Color Utilities (`ui/widgets/draw.go`)
+
+- `WithAlpha(c, a)` — return color with new alpha
+- `MulAlpha(c, a)` — multiply existing alpha
+- `Hovered(c)` — blend toward white (dark) or black (light)
+- `Disabled(c)` — desaturate + reduce alpha
+- `DrawRect`, `DrawBorderedRect`, `DrawLeftBorder`, `FillBackground` — shape helpers
+
+---
+
+## 18. Rendering Performance
 
 This section documents the rendering performance strategy. The app is IO-bound (reading pi's RPC stream), not CPU-bound, so all performance risks are in the rendering layer.
 
@@ -729,7 +827,32 @@ If a single markdown render takes >16ms (blocking a frame), break it into chunks
 
 ---
 
-## 18. Cross-Platform Notes
+## 19. Authentication
+
+Pier never handles credentials directly. All authentication is managed by pi.
+
+### How It Works
+
+1. **One-time setup:** The user runs `pi /login` in a terminal (interactive mode only). Pi opens a browser for OAuth, receives tokens, and saves them to `~/.pi/agent/auth.json`.
+2. **Pier inherits auth:** When Pier spawns `pi --mode rpc`, pi reads `auth.json` from disk. OAuth tokens auto-refresh via file locking. Multiple pi instances (including Pier's) can share the same auth file safely.
+3. **No RPC login:** The `/login` command is interactive-mode-only — it requires a browser and user interaction that doesn't map to a JSON protocol. Pier cannot trigger OAuth flows.
+
+### Auth Resolution (pi's priority order)
+
+1. Runtime override (`--api-key` CLI flag)
+2. API key from `auth.json`
+3. OAuth token from `auth.json` (auto-refreshed with file locking)
+4. Environment variable (e.g., `ANTHROPIC_API_KEY`)
+5. Fallback resolver (custom providers from `models.json`)
+
+### What Pier Should Do
+
+- **On session start failure:** If pi errors because no auth is configured, show: "No authentication found. Run `pi /login` in a terminal first."
+- **Never read `auth.json`:** Pier has no reason to inspect credentials. Pi handles all auth resolution internally.
+
+---
+
+## 20. Cross-Platform Notes
 
 Gio abstracts the platform layer entirely. The same Go code produces:
 
@@ -751,7 +874,7 @@ Mac build: `GOOS=darwin GOARCH=arm64 go build -o pier-mac .`
 
 ---
 
-## 19. Build and Distribution
+## 21. Build and Distribution
 
 ```bash
 # Development
@@ -773,52 +896,64 @@ Gio requires a C compiler for CGo (`gcc` or `clang`). Only build dependency beyo
 
 ---
 
-## 20. Build Order
+## 22. Build Order (completed)
 
-### Phase 1 — Core Loop
+All phases have been implemented.
 
-Validate pi's RPC protocol before writing any UI.
+### Phase 1 — Core Loop ✓
 
-1. **Pi RPC event parser** — define all event structs matching Section 8's event table, write the JSONL decoder, write a test harness that spawns `pi --mode rpc` and prints parsed events to stdout
-2. **Session process manager** — spawn pi, read events into a channel, write commands to stdin
-3. **br wrapper** — shell out to `br ready --json`, parse output, model the task structs
-4. **Minimal Gio window** — blank window with a sidebar and main area
-5. **Wire one session end to end** — spawn pi, send a prompt, see streaming text rendered in the timeline using the two-mode renderer (streaming plain text → complete markdown)
+1. Pi RPC event parser — all event/command structs, JSONL decoder with `\n`-only splitting
+2. Session process manager — spawn/pipe/stop with goroutine fan-out to channels
+3. br wrapper — shell out to `br --json`, parse task structs
+4. Minimal Gio window — sidebar + main area layout with theme
+5. Wire one session end to end — full data path: prompt → pi stdin → events → state → timeline
 
-Phase 1 ends with a working single-session app, no persistence, minimal styling.
+### Phase 2 — Full Execute UI ✓
 
-### Phase 2 — Full Execute UI
+1. Timeline widget — markdown for complete messages, plain text during streaming, collapsible tool blocks
+2. Extension UI handler — select, confirm, input, editor dialogs with modal overlay
+3. Sidebar session cards — model pill badges, status dots, unread indicators
+4. Prompt bar — slash command autocomplete from `get_commands`, bordered container
+5. Task panel — ready/in-progress/blocked sections, on-demand refresh
+6. Session ↔ task linking — start from task card auto-marks in_progress, close prompts completion
+7. Multi-session — concurrent sessions with tab switching, only focused renders full timeline
 
-1. **Timeline widget** — messages, tool call blocks (with `toolCallId` correlation), collapsible monospace output, truncated output with expand
-2. **Extension UI handler** — dialog rendering for `extension_ui_request` events (select, confirm, input)
-3. **Sidebar session cards** with model and status badges
-4. **Prompt bar** with slash command autocomplete (populated via `get_commands`)
-5. **Task panel** — on-demand br refresh, showing ready/in-progress/blocked
-6. **Session ↔ task linking** — start from task card, close task on session end, task panel refreshes
-7. **Session switching** between multiple concurrent sessions
+### Phase 3 — Planning Workflow ✓
 
-### Phase 3 — Planning Workflow
+1. Discover view — pi with `--no-tools --no-extensions --no-skills`, chat thread
+2. Plan handoff — conversation transcript → pi session → writes plan.md
+3. Plan panel — markdown renderer, "Open in $EDITOR", re-render on focus
+4. Create br Tasks — `/create-tasks` prompt template, task panel refreshes
 
-1. **Discover view** — spawn pi with `--no-tools --no-extensions --no-skills --mode rpc`, chat thread, model selector
-2. **Handoff** — conversation transcript → plan generation pi session, detect `plan.md` write via `tool_execution_end` event
-3. **Plan panel** — markdown renderer via `gioui.org/x/markdown`, "Open in $EDITOR" button, re-render on focus
-4. **Create br Tasks flow** — send `/create-tasks` to pi session (user's existing prompt template), task panel refreshes on completion
+### Phase 4 — Persistence and Polish ✓
 
-### Phase 4 — Persistence and Polish
+1. Session persistence — workspace state saved to `~/.config/pier/`, session file paths for resume
+2. Theme — dark (default) and light with 4-level surface stack, opacity-based text hierarchy
+3. Config file — `~/.config/pier/config.json` with sensible defaults
+4. Keyboard shortcuts — pi passthrough (Escape, Ctrl+P, Shift+Tab) + Pier UI (Ctrl+B, Ctrl+R, etc.)
+5. Bundled resources — discover.md and create-tasks.md embedded via `go:embed`
 
-1. **Session persistence** — save/restore workspace state, resume pi sessions via `--session <path>`, reconstruct timeline via `get_messages`
-2. **Theme** — light (default) and dark, hardcoded
-3. **Config file** — full options with sensible defaults
-4. **Mac build validation** — confirm Gio Metal backend, test config paths
-5. **Rendering stress test** — 5 concurrent sessions, long timelines, verify frame budget holds
+### Phase 5 — UI Polish ✓
 
-### Phase 5 — Deferred Enhancements
-
-1. **Custom diff widget** (`ui/diff.go` + `go-difflib`) — green/red inline diff rendering for write/edit tool results. Until then, tool output rendered as monospace text (pi's output already contains diff information)
+1. Embedded fonts — Inter (4 weights) + JetBrains Mono (2 weights) via `go:embed`
+2. Color utilities — WithAlpha, MulAlpha, Hovered, Disabled + DrawRect/DrawBorderedRect helpers
+3. Hover tracking — reusable HoverState widget via pointer events
+4. Restyled sidebar — hover states, accent bar selection, pill badges
+5. Restyled prompt bar — bordered container, status line, conditional send button
+6. Restyled tool blocks — bordered cards, hover feedback, error accent bars
+7. Restyled timeline — left accent border on assistant messages, message grouping, model badges
+8. Restyled task panel — bordered cards, priority dots, hover, error states
+9. Restyled extension dialogs — dimmed backdrop, centered card
+10. Animated status dots — pulsing sine wave for thinking/streaming
+11. Code block styling — JetBrains Mono in markdown renderer
+12. Diff widget — green/red unified diff rendering
+13. Empty states — contextual placeholder messages
+14. Scroll shadows — top/bottom gradient overflow indicators
+15. Stress tests — concurrent decoders, long timelines, concurrent state access
 
 ---
 
-## 21. What You Get Over the Current Workflow
+## 23. What You Get Over the Current Workflow
 
 ### Over Running pi in a Terminal
 
