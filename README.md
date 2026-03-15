@@ -1,17 +1,22 @@
 # Pier
 
-A native GUI for the [pi](https://pi.dev) coding agent. Manages multiple concurrent pi sessions, surfaces structured data invisible in a raw terminal, and covers the full workflow — discover, plan, create tasks, execute — in one tool.
+A native GUI for [pi](https://pi.dev), the open-source terminal coding harness. Pier connects to pi's [RPC mode](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent/docs/rpc.md) — a JSON protocol designed for exactly this kind of embedding — and renders structured agent data that's invisible in a raw terminal.
+
+Multiple concurrent sessions, the full discover → plan → execute workflow, and [br](https://github.com/Dicklesworthstone/beads_rust) task tracking, all in one window.
 
 **Go + Gio · Single binary · ~11MB · Wayland/X11/Metal**
 
-## Why
+> Pier is **not** a replacement for pi. Pi does all the LLM work — tools, context management, extensions, compaction, model switching. Pier is a display layer that reads pi's event stream and provides a visual interface for managing sessions.
 
-Running pi in a terminal works, but you can't see:
-- Which tool is executing and what it's doing
-- When the agent is thinking vs. streaming vs. waiting
-- File diffs from write/edit operations at a glance
-- Multiple sessions side by side
-- Task progress without switching to another terminal
+## Why a GUI
+
+Pi is deliberately terminal-first and extensible. That's the right default. But some things are easier to see than read:
+
+- Which tool is executing right now, with what arguments
+- Diffs from write/edit operations, color-coded
+- Agent status at a glance across multiple sessions
+- Task progress without switching terminals
+- Extension dialogs (confirmations, selections) as native widgets instead of TUI prompts
 
 Pier reads pi's structured RPC event stream and renders all of this natively — no webview, no Electron, no GTK.
 
@@ -21,19 +26,27 @@ Pier reads pi's structured RPC event stream and renders all of this natively —
 - **Structured timeline** — messages render as markdown (Inter + JetBrains Mono), tool calls are collapsible bordered cards with hover feedback
 - **Live status** — sidebar shows thinking/streaming/waiting/error per session with pulsing animated status dots
 - **Task panel** — displays [br](https://github.com/Dicklesworthstone/beads_rust) tasks grouped by ready/in-progress/blocked with priority dots and hover states
-- **Discovery mode** — tool-free chat for thinking through the problem before writing code
+- **Discovery mode** — tool-free chat (pi with `--no-tools`) for thinking through the problem before writing code
 - **Plan panel** — renders plan.md as markdown, one click to open in your editor
 - **Slash command autocomplete** — type `/` in the prompt bar to see all pi commands in a bordered popup
 - **Extension UI** — renders pi extension dialogs (select, confirm, input) as centered modal cards with dimmed backdrop
 - **Diff rendering** — green/red line coloring for unified diffs in tool output
-- **Pi keybindings** — Escape aborts, Ctrl+P cycles models, Shift+Tab cycles thinking level — same as pi's terminal UI, forwarded as RPC commands
+- **Pi keybindings** — Escape aborts, Ctrl+P cycles models, Shift+Tab cycles thinking level — same keys as pi's terminal UI, forwarded as RPC commands
+
+## How It Works
+
+Pier spawns pi as a child process in RPC mode (`pi --mode rpc`). Pi emits newline-delimited JSON events on stdout (agent lifecycle, streaming text deltas, tool executions, compaction, extension UI requests). Pier decodes the stream, updates a state machine, and renders the result with Gio's immediate-mode GPU-accelerated UI.
+
+Commands go the other way: when you type a prompt or press Ctrl+P, Pier writes a JSON command to pi's stdin. Pi handles it and emits the resulting events.
+
+Pi manages everything: the LLM, tools, sessions, extensions, compaction, auth. Pier manages the display.
 
 ## Requirements
 
 - **Go 1.21+** (build dependency)
 - **C compiler** — `gcc` or `clang` (Gio CGo requirement, present by default on most Linux distros)
-- **pi** — installed and authenticated (`pi /login`)
-- **br** (optional) — for task panel functionality
+- **[pi](https://pi.dev)** — installed and authenticated (`pi /login`)
+- **[br](https://github.com/Dicklesworthstone/beads_rust)** (optional) — for task panel functionality
 
 ## Install
 
