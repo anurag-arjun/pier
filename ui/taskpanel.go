@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"image"
 
+	"gioui.org/font"
 	"gioui.org/layout"
 	"gioui.org/op/clip"
 	"gioui.org/op/paint"
@@ -13,6 +14,7 @@ import (
 
 	apptheme "github.com/lighto/pier/app"
 	"github.com/lighto/pier/br"
+	"github.com/lighto/pier/ui/widgets"
 )
 
 // TaskPanel displays br tasks grouped by status.
@@ -20,19 +22,16 @@ type TaskPanel struct {
 	theme    apptheme.Theme
 	matTheme *material.Theme
 
-	visible   bool
-	tasks     []br.Task // cached task list
-	brErr     string    // error message (e.g., "br not found")
-	list      widget.List
-
+	visible    bool
+	tasks      []br.Task
+	brErr      string
+	list       widget.List
 	refreshBtn widget.Clickable
-	taskClicks []widget.Clickable
+	taskHovers []widgets.HoverState
 
-	// Callback when a task card is clicked
 	OnTaskClick func(task br.Task)
 }
 
-// NewTaskPanel creates a task panel.
 func NewTaskPanel(theme apptheme.Theme, matTheme *material.Theme) *TaskPanel {
 	return &TaskPanel{
 		theme:    theme,
@@ -42,98 +41,99 @@ func NewTaskPanel(theme apptheme.Theme, matTheme *material.Theme) *TaskPanel {
 	}
 }
 
-// SetVisible shows/hides the panel.
 func (tp *TaskPanel) SetVisible(v bool) { tp.visible = v }
+func (tp *TaskPanel) Visible() bool     { return tp.visible }
+func (tp *TaskPanel) Toggle()           { tp.visible = !tp.visible }
 
-// Visible returns whether the panel is visible.
-func (tp *TaskPanel) Visible() bool { return tp.visible }
-
-// Toggle toggles panel visibility.
-func (tp *TaskPanel) Toggle() { tp.visible = !tp.visible }
-
-// SetTasks updates the cached task list.
 func (tp *TaskPanel) SetTasks(tasks []br.Task) {
 	tp.tasks = tasks
 	tp.brErr = ""
-	for len(tp.taskClicks) < len(tasks) {
-		tp.taskClicks = append(tp.taskClicks, widget.Clickable{})
+	for len(tp.taskHovers) < len(tasks) {
+		tp.taskHovers = append(tp.taskHovers, widgets.HoverState{})
 	}
 }
 
-// SetError sets an error message (e.g., br not found).
-func (tp *TaskPanel) SetError(err string) {
-	tp.brErr = err
-	tp.tasks = nil
-}
+func (tp *TaskPanel) SetError(err string) { tp.brErr = err; tp.tasks = nil }
 
-// RefreshClicked returns true if the refresh button was clicked.
 func (tp *TaskPanel) RefreshClicked(gtx layout.Context) bool {
 	return tp.refreshBtn.Clicked(gtx)
 }
 
-// Layout renders the task panel.
 func (tp *TaskPanel) Layout(gtx layout.Context) layout.Dimensions {
 	if !tp.visible {
 		return layout.Dimensions{}
 	}
 
-	width := gtx.Dp(unit.Dp(280))
+	width := gtx.Dp(unit.Dp(260))
 	gtx.Constraints.Min.X = width
 	gtx.Constraints.Max.X = width
 
-	// Background
-	rect := image.Rect(0, 0, width, gtx.Constraints.Max.Y)
-	paint.FillShape(gtx.Ops, tp.theme.Palette.Surface, clip.Rect(rect).Op())
+	paint.FillShape(gtx.Ops, tp.theme.Palette.Surface, clip.Rect(image.Rect(0, 0, width, gtx.Constraints.Max.Y)).Op())
 
-	// Check task clicks
-	for i := range tp.tasks {
-		if i < len(tp.taskClicks) && tp.taskClicks[i].Clicked(gtx) {
-			if tp.OnTaskClick != nil {
-				tp.OnTaskClick(tp.tasks[i])
-			}
-		}
-	}
-
-	return layout.Inset{
-		Top: unit.Dp(8), Left: unit.Dp(8), Right: unit.Dp(8),
-	}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+	return layout.Inset{Top: unit.Dp(12), Left: unit.Dp(12), Right: unit.Dp(12)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 		return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
 			// Header
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				return layout.Flex{Alignment: layout.Middle, Spacing: layout.SpaceBetween}.Layout(gtx,
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-						lbl := material.Caption(tp.matTheme, "TASKS")
-						lbl.Color = tp.theme.Palette.TextSecondary
+						lbl := material.Label(tp.matTheme, tp.theme.Typo.Caption, "TASKS")
+						lbl.Color = tp.theme.Palette.TextTertiary
+						lbl.Font.Weight = font.Medium
 						return lbl.Layout(gtx)
 					}),
 					layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 						btn := material.Button(tp.matTheme, &tp.refreshBtn, "↻")
 						btn.Background = tp.theme.Palette.SurfaceAlt
 						btn.Color = tp.theme.Palette.TextSecondary
-						btn.Inset = layout.Inset{
-							Left: unit.Dp(8), Right: unit.Dp(8),
-							Top: unit.Dp(2), Bottom: unit.Dp(2),
-						}
+						btn.TextSize = tp.theme.Typo.BodySmall
+						btn.Inset = layout.Inset{Left: unit.Dp(8), Right: unit.Dp(8), Top: unit.Dp(3), Bottom: unit.Dp(3)}
 						return btn.Layout(gtx)
 					}),
 				)
 			}),
-			layout.Rigid(layout.Spacer{Height: unit.Dp(8)}.Layout),
+			layout.Rigid(layout.Spacer{Height: unit.Dp(12)}.Layout),
 			// Error state
 			layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 				if tp.brErr == "" {
 					return layout.Dimensions{}
 				}
-				lbl := material.Body2(tp.matTheme, tp.brErr)
-				lbl.Color = tp.theme.Palette.Error
-				return lbl.Layout(gtx)
+				return tp.layoutError(gtx)
 			}),
 			// Task list
 			layout.Flexed(1, func(gtx layout.Context) layout.Dimensions {
+				if len(tp.tasks) == 0 && tp.brErr == "" {
+					lbl := material.Label(tp.matTheme, tp.theme.Typo.BodySmall, "No tasks yet.")
+					lbl.Color = tp.theme.Palette.TextTertiary
+					return lbl.Layout(gtx)
+				}
 				return tp.layoutTaskList(gtx)
 			}),
 		)
 	})
+}
+
+func (tp *TaskPanel) layoutError(gtx layout.Context) layout.Dimensions {
+	return layout.Stack{}.Layout(gtx,
+		layout.Expanded(func(gtx layout.Context) layout.Dimensions {
+			rr := gtx.Dp(tp.theme.Space.BorderRadius)
+			size := gtx.Constraints.Min
+			if size.X == 0 {
+				size.X = gtx.Constraints.Max.X
+			}
+			widgets.DrawBorderedRect(gtx, tp.theme.Palette.ToolBlockBg, tp.theme.Palette.Error, size, rr, 1)
+			// Left red accent
+			barW := gtx.Dp(unit.Dp(3))
+			paint.FillShape(gtx.Ops, tp.theme.Palette.Error, clip.Rect(image.Rect(0, 0, barW, size.Y)).Op())
+			return layout.Dimensions{Size: size}
+		}),
+		layout.Stacked(func(gtx layout.Context) layout.Dimensions {
+			return layout.Inset{Left: unit.Dp(12), Right: unit.Dp(8), Top: unit.Dp(8), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(tp.matTheme, tp.theme.Typo.BodySmall, tp.brErr)
+				lbl.Color = tp.theme.Palette.Error
+				return lbl.Layout(gtx)
+			})
+		}),
+	)
 }
 
 func (tp *TaskPanel) layoutTaskList(gtx layout.Context) layout.Dimensions {
@@ -155,16 +155,14 @@ func (tp *TaskPanel) layoutTaskList(gtx layout.Context) layout.Dimensions {
 		if len(sec.tasks) == 0 {
 			continue
 		}
-		// Section header
 		items = append(items, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-			return layout.Inset{Top: unit.Dp(8), Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
-				lbl := material.Caption(tp.matTheme, fmt.Sprintf(sec.label, len(sec.tasks)))
-				lbl.Color = tp.theme.Palette.TextSecondary
-				lbl.Font.Weight = 700
+			return layout.Inset{Top: unit.Dp(8), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				lbl := material.Label(tp.matTheme, tp.theme.Typo.Caption, fmt.Sprintf(sec.label, len(sec.tasks)))
+				lbl.Color = tp.theme.Palette.TextTertiary
+				lbl.Font.Weight = font.Medium
 				return lbl.Layout(gtx)
 			})
 		}))
-		// Task cards
 		for _, task := range sec.tasks {
 			task := task
 			items = append(items, layout.Rigid(func(gtx layout.Context) layout.Dimensions {
@@ -187,7 +185,6 @@ func (tp *TaskPanel) groupTasks() (ready, inProgress, blocked []br.Task) {
 		case "open":
 			ready = append(ready, t)
 		default:
-			// "deferred" or other → blocked-ish
 			blocked = append(blocked, t)
 		}
 	}
@@ -195,26 +192,50 @@ func (tp *TaskPanel) groupTasks() (ready, inProgress, blocked []br.Task) {
 }
 
 func (tp *TaskPanel) layoutTaskCard(gtx layout.Context, task br.Task) layout.Dimensions {
+	// Find hover index
+	idx := -1
+	for i, t := range tp.tasks {
+		if t.ID == task.ID {
+			idx = i
+			break
+		}
+	}
+
+	isBlocked := task.Status != "open" && task.Status != "in_progress"
+
 	return layout.Inset{Bottom: unit.Dp(4)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+		borderColor := tp.theme.Palette.BorderSubtle
+		if idx >= 0 && idx < len(tp.taskHovers) {
+			tp.taskHovers[idx].Update(gtx)
+			if tp.taskHovers[idx].Hovered() {
+				borderColor = tp.theme.Palette.Border
+			}
+		}
+
 		return layout.Stack{}.Layout(gtx,
 			layout.Expanded(func(gtx layout.Context) layout.Dimensions {
-				rr := gtx.Dp(unit.Dp(4))
-				bounds := image.Rect(0, 0, gtx.Constraints.Min.X, gtx.Constraints.Min.Y)
-				rrect := clip.RRect{Rect: bounds, NE: rr, NW: rr, SE: rr, SW: rr}
-				defer rrect.Push(gtx.Ops).Pop()
-				paint.Fill(gtx.Ops, tp.theme.Palette.SurfaceAlt)
-				return layout.Dimensions{Size: bounds.Max}
+				rr := gtx.Dp(tp.theme.Space.BorderRadius)
+				size := gtx.Constraints.Min
+				if size.X == 0 {
+					size.X = gtx.Constraints.Max.X
+				}
+				if size.Y == 0 {
+					size.Y = gtx.Constraints.Max.Y
+				}
+				bg := tp.theme.Palette.SurfaceAlt
+				if isBlocked {
+					bg = widgets.MulAlpha(bg, 128)
+				}
+				widgets.DrawBorderedRect(gtx, bg, borderColor, size, rr, 1)
+				return layout.Dimensions{Size: size}
 			}),
 			layout.Stacked(func(gtx layout.Context) layout.Dimensions {
-				return layout.Inset{
-					Left: unit.Dp(8), Right: unit.Dp(8),
-					Top: unit.Dp(6), Bottom: unit.Dp(6),
-				}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
+				return layout.Inset{Left: unit.Dp(10), Right: unit.Dp(10), Top: unit.Dp(8), Bottom: unit.Dp(8)}.Layout(gtx, func(gtx layout.Context) layout.Dimensions {
 					return layout.Flex{Axis: layout.Vertical}.Layout(gtx,
-						// Priority + ID + Title
+						// Priority dot + ID
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 							return layout.Flex{Alignment: layout.Middle}.Layout(gtx,
-								// Priority badge
+								// Priority dot
 								layout.Rigid(func(gtx layout.Context) layout.Dimensions {
 									c := tp.theme.Palette.PriorityP3
 									if task.Priority <= 1 {
@@ -222,10 +243,10 @@ func (tp *TaskPanel) layoutTaskCard(gtx layout.Context, task br.Task) layout.Dim
 									} else if task.Priority == 2 {
 										c = tp.theme.Palette.PriorityP2
 									}
-									lbl := material.Caption(tp.matTheme, fmt.Sprintf("P%d", task.Priority))
-									lbl.Color = c
-									lbl.Font.Weight = 700
-									return lbl.Layout(gtx)
+									size := gtx.Dp(unit.Dp(8))
+									defer clip.Ellipse{Max: image.Pt(size, size)}.Push(gtx.Ops).Pop()
+									paint.Fill(gtx.Ops, c)
+									return layout.Dimensions{Size: image.Pt(size, size)}
 								}),
 								layout.Rigid(layout.Spacer{Width: unit.Dp(6)}.Layout),
 								// ID
@@ -234,17 +255,22 @@ func (tp *TaskPanel) layoutTaskCard(gtx layout.Context, task br.Task) layout.Dim
 									if len(id) > 12 {
 										id = id[len(id)-8:]
 									}
-									lbl := material.Caption(tp.matTheme, id)
-									lbl.Color = tp.theme.Palette.TextSecondary
+									lbl := material.Label(tp.matTheme, tp.theme.Typo.Caption, id)
+									lbl.Color = tp.theme.Palette.TextTertiary
+									lbl.Font.Typeface = tp.theme.Typo.MonoFace
 									return lbl.Layout(gtx)
 								}),
 							)
 						}),
-						layout.Rigid(layout.Spacer{Height: unit.Dp(2)}.Layout),
+						layout.Rigid(layout.Spacer{Height: unit.Dp(4)}.Layout),
 						// Title
 						layout.Rigid(func(gtx layout.Context) layout.Dimensions {
-							lbl := material.Body2(tp.matTheme, task.Title)
+							lbl := material.Label(tp.matTheme, tp.theme.Typo.BodySmall, task.Title)
+							lbl.Font.Weight = font.Medium
 							lbl.Color = tp.theme.Palette.Text
+							if isBlocked {
+								lbl.Color = tp.theme.Palette.TextSecondary
+							}
 							lbl.MaxLines = 2
 							return lbl.Layout(gtx)
 						}),
