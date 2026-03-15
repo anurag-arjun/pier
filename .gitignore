@@ -1,6 +1,7 @@
 pier
 *.exe
 .beads/
+docs/
 
 # bv (beads viewer) local config and caches
 .bv/
